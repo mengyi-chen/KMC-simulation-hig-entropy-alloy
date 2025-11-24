@@ -206,7 +206,7 @@ class CavityHealingKMC:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Cavity Healing kMC (Refactored)')
-    parser.add_argument('--device', type=str, default='4', help='CUDA device or cpu')
+    parser.add_argument('--device', type=str, default='2', help='CUDA device or cpu')
     parser.add_argument('--temp', type=float, default=1000, help='Temperature in Kelvin')
     parser.add_argument('--cutoff', type=float, default=6.0, help='Cutoff radius in Angstrom')
     parser.add_argument('--steps', type=int, default=int(1e6), help='Number of kMC steps')
