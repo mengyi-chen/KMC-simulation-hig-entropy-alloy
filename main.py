@@ -10,9 +10,6 @@ Simplified implementation with clear separation of concerns:
 - SROCalculator: Calculates short-range order
 - SimulationLogger: Handles logging
 """ 
-# TODO: CHGNet efficiency improvements
-# TODO: add oxygen dynamics 
-# TODO: add energy barrier: the current setting is not totally correct 
 import numpy as np
 import time
 import os
