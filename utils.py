@@ -26,7 +26,7 @@ class KMCParams:
     """All parameters for kinetic Monte Carlo simulation"""
     # Simulation parameters
     temperature: float = 1200.0  # Temperature in Kelvin
-    n_cutoff_cell: int = 1  # Number of unit cells for cutoff radius (half-length of local cube)
+    # n_cutoff_cell: int = 1  # DEPRECATED: No longer used with unit-cell-based local environment
     batch_size: int = 64  # Batch size for CHGNet barrier calculations
     nu0: float = 1e13  # Attempt frequency in Hz
     kb: float = 8.617e-5  # Boltzmann constant in eV/K
@@ -71,10 +71,10 @@ class KMCParams:
         """Return kB*T for convenience"""
         return self.kb * self.temperature
 
-    @property
-    def cutoff(self):
-        """Calculate cutoff radius from n_cutoff_cell"""
-        return self.n_cutoff_cell * self.unit_cell_size
+    # @property
+    # def cutoff(self):
+    #     """DEPRECATED: Calculate cutoff radius from n_cutoff_cell"""
+    #     return self.n_cutoff_cell * self.unit_cell_size
 
     @property
     def nn_distance_A(self):

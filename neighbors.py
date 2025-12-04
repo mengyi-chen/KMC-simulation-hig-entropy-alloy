@@ -99,77 +99,134 @@ class NeighborManager:
     #     # Log statistics
     #     self._log_general_neighbors()
 
+    # def _build_all_neighbors(self) -> None:
+    #     """Build general neighbor list using cubic boundaries"""
+    #     pos_cart = self.structure.positions @ self.structure.cell
+    #     n_atoms = self.structure.n_atoms
+
+    #     # Get actual cutoff
+    #     actual_cutoff = self.params.cutoff
+
+    #     # Build cubic neighbor list for all atoms
+    #     neighbors_dict = defaultdict(list)
+
+    #     # For each atom, find neighbors in cubic region
+    #     for center_idx in range(n_atoms):
+    #         center_pos = pos_cart[center_idx]
+
+    #         # Calculate displacements from center to all other atoms
+    #         displacements = pos_cart - center_pos
+
+    #         # Apply periodic boundary conditions for x,y (not z)
+    #         displacements[:, 0] -= np.round(displacements[:, 0] / self.structure.cell[0, 0]) * self.structure.cell[0, 0]
+    #         displacements[:, 1] -= np.round(displacements[:, 1] / self.structure.cell[1, 1]) * self.structure.cell[1, 1]
+
+    #         # For x and y: use PBC, select atoms within [-actual_cutoff, actual_cutoff)
+    #         # Left boundary >= -actual_cutoff (include), right boundary < actual_cutoff (exclude)
+    #         # Add tolerance to strictly include left boundary and exclude right boundary
+    #         tol = 0.1
+    #         in_xy = (displacements[:, 0] >= -actual_cutoff - tol) & (displacements[:, 0] < actual_cutoff - tol) & \
+    #                 (displacements[:, 1] >= -actual_cutoff - tol) & (displacements[:, 1] < actual_cutoff - tol)
+
+    #         # For z direction: calculate distance to top and bottom surfaces
+    #         # Supercell height in z
+    #         z_height = self.structure.cell[2, 2]
+
+    #         # Center atom z position
+    #         center_z = center_pos[2]
+
+    #         # Distance to bottom surface (z=0)
+    #         dist_to_bottom = center_z
+    #         # Distance to top surface (z=z_height)
+    #         dist_to_top = z_height - center_z
+
+    #         # Handle asymmetric boundaries:
+    #         # If distance to one side < actual_cutoff, include all to that side
+    #         # and adjust the other side to maintain total cutoff range
+    #         target_total_cutoff = 2.0 * actual_cutoff
+
+    #         if dist_to_bottom < actual_cutoff:
+    #             # Bottom side too close: include all to bottom, adjust top
+    #             actual_cutoff_bottom = dist_to_bottom
+    #             actual_cutoff_top = target_total_cutoff - dist_to_bottom
+    #         elif dist_to_top < actual_cutoff:
+    #             # Top side too close: include all to top, adjust bottom
+    #             actual_cutoff_top = dist_to_top
+    #             actual_cutoff_bottom = target_total_cutoff - dist_to_top
+    #         else:
+    #             # Both sides have enough space: use symmetric cutoff
+    #             actual_cutoff_bottom = actual_cutoff
+    #             actual_cutoff_top = actual_cutoff
+
+    #         # For z: select atoms with asymmetric cutoffs
+    #         in_z = (displacements[:, 2] >= -actual_cutoff_bottom - tol) & \
+    #                (displacements[:, 2] < actual_cutoff_top - tol)
+
+    #         # Combine all conditions
+    #         in_cube = in_xy & in_z
+
+    #         # Exclude the center atom itself
+    #         in_cube[center_idx] = False
+
+    #         # Find neighbor indices
+    #         neighbor_indices = np.where(in_cube)[0]
+    #         neighbors_dict[center_idx] = list(neighbor_indices)
+
+    #     # Convert to CSR and keep dict
+    #     self.neighbors_csr = CSRNeighborList.from_dict(neighbors_dict, n_atoms, with_distances=False)
+    #     self.neighbors_dict = neighbors_dict
+
+    #     # Log statistics
+    #     self._log_general_neighbors()
+
     def _build_all_neighbors(self) -> None:
-        """Build general neighbor list using cubic boundaries"""
-        pos_cart = self.structure.positions @ self.structure.cell
+        """Build general neighbor list using unit-cell-based selection
+
+        For each atom (vacancy):
+        - XY direction: Select 3x3 unit cells centered on the cell containing the vacancy
+        - Z direction: If >=1 unit cell below, include 1 cell below; if >=1 cell above, include 1 cell above
+        """
         n_atoms = self.structure.n_atoms
-
-        # Get actual cutoff
-        actual_cutoff = self.params.cutoff
-
-        # Build cubic neighbor list for all atoms
         neighbors_dict = defaultdict(list)
 
-        # For each atom, find neighbors in cubic region
+        # Get supercell dimensions
+        supercell_size = self.structure.supercell_size
+
+        # Pre-compute unit cell indices for all atoms (vectorized)
+        # Add small tolerance to avoid numerical precision issues
+        all_cell_indices = np.floor(self.structure.positions * supercell_size + 1e-6).astype(int)
+
+        # For each atom, find neighbors in unit-cell-based region
         for center_idx in range(n_atoms):
-            center_pos = pos_cart[center_idx]
+            center_cell_idx = all_cell_indices[center_idx]
 
-            # Calculate displacements from center to all other atoms
-            displacements = pos_cart - center_pos
+            # XY direction: 3x3 grid centered on center_cell_idx
+            # Define allowed cell indices in XY with PBC
+            x_cells = [(center_cell_idx[0] + offset) % supercell_size[0] for offset in [-1, 0, 1]]
+            y_cells = [(center_cell_idx[1] + offset) % supercell_size[1] for offset in [-1, 0, 1]]
 
-            # Apply periodic boundary conditions for x,y (not z)
-            displacements[:, 0] -= np.round(displacements[:, 0] / self.structure.cell[0, 0]) * self.structure.cell[0, 0]
-            displacements[:, 1] -= np.round(displacements[:, 1] / self.structure.cell[1, 1]) * self.structure.cell[1, 1]
+            # Z direction: conditional inclusion
+            z_cells = [center_cell_idx[2]]  # Always include the center cell in z
 
-            # For x and y: use PBC, select atoms within [-actual_cutoff, actual_cutoff)
-            # Left boundary >= -actual_cutoff (include), right boundary < actual_cutoff (exclude)
-            # Add tolerance to strictly include left boundary and exclude right boundary
-            tol = 0.1
-            in_xy = (displacements[:, 0] >= -actual_cutoff - tol) & (displacements[:, 0] < actual_cutoff - tol) & \
-                    (displacements[:, 1] >= -actual_cutoff - tol) & (displacements[:, 1] < actual_cutoff - tol)
+            # Check if there's at least 1 cell below
+            if center_cell_idx[2] >= 1:
+                z_cells.append(center_cell_idx[2] - 1)
 
-            # For z direction: calculate distance to top and bottom surfaces
-            # Supercell height in z
-            z_height = self.structure.cell[2, 2]
+            # Check if there's at least 1 cell above
+            if center_cell_idx[2] < supercell_size[2] - 1:
+                z_cells.append(center_cell_idx[2] + 1)
 
-            # Center atom z position
-            center_z = center_pos[2]
+            # Vectorized filtering: check if atoms are in allowed cells
+            in_x_cells = np.isin(all_cell_indices[:, 0], x_cells)
+            in_y_cells = np.isin(all_cell_indices[:, 1], y_cells)
+            in_z_cells = np.isin(all_cell_indices[:, 2], z_cells)
 
-            # Distance to bottom surface (z=0)
-            dist_to_bottom = center_z
-            # Distance to top surface (z=z_height)
-            dist_to_top = z_height - center_z
+            # Combine conditions and exclude center atom
+            neighbor_mask = in_x_cells & in_y_cells & in_z_cells
+            neighbor_mask[center_idx] = False
 
-            # Handle asymmetric boundaries:
-            # If distance to one side < actual_cutoff, include all to that side
-            # and adjust the other side to maintain total cutoff range
-            target_total_cutoff = 2.0 * actual_cutoff
-
-            if dist_to_bottom < actual_cutoff:
-                # Bottom side too close: include all to bottom, adjust top
-                actual_cutoff_bottom = dist_to_bottom
-                actual_cutoff_top = target_total_cutoff - dist_to_bottom
-            elif dist_to_top < actual_cutoff:
-                # Top side too close: include all to top, adjust bottom
-                actual_cutoff_top = dist_to_top
-                actual_cutoff_bottom = target_total_cutoff - dist_to_top
-            else:
-                # Both sides have enough space: use symmetric cutoff
-                actual_cutoff_bottom = actual_cutoff
-                actual_cutoff_top = actual_cutoff
-
-            # For z: select atoms with asymmetric cutoffs
-            in_z = (displacements[:, 2] >= -actual_cutoff_bottom - tol) & \
-                   (displacements[:, 2] < actual_cutoff_top - tol)
-
-            # Combine all conditions
-            in_cube = in_xy & in_z
-
-            # Exclude the center atom itself
-            in_cube[center_idx] = False
-
-            # Find neighbor indices
-            neighbor_indices = np.where(in_cube)[0]
+            # Add all neighbors to the dict
+            neighbor_indices = np.where(neighbor_mask)[0]
             neighbors_dict[center_idx] = list(neighbor_indices)
 
         # Convert to CSR and keep dict
@@ -193,7 +250,7 @@ class NeighborManager:
         avg_B = total_bonds_B / len(B_indices) if len(B_indices) > 0 else 0
         avg_O = total_bonds_O / len(O_indices) if len(O_indices) > 0 else 0
 
-        logger.info(f"General neighbor list for energy calculations (all atoms within {self.params.cutoff:.1f} Å):")
+        logger.info(f"General neighbor list for energy calculations (unit-cell-based: 3x3 XY, conditional Z):")
         logger.info(f"  A-sites: {total_bonds_A} bonds (avg {avg_A:.1f} per atom)")
         logger.info(f"  B-sites: {total_bonds_B} bonds (avg {avg_B:.1f} per atom)")
         logger.info(f"  O-sites: {total_bonds_O} bonds (avg {avg_O:.1f} per atom)")
@@ -354,7 +411,7 @@ class NeighborManager:
             'oxygen_neighbors_dict': dict(self.oxygen_neighbors_dict),
             'n_atoms': self.structure.n_atoms,
             'params': {
-                'cutoff': self.params.cutoff,
+                # 'cutoff': self.params.cutoff,  # DEPRECATED: No longer used
                 'nn_distance_A': self.params.nn_distance_A,
                 'nn_distance_B': self.params.nn_distance_B,
                 'nn_distance_O': self.params.nn_distance_O,
@@ -382,16 +439,22 @@ class NeighborManager:
 
         # Validate parameters match
         saved_params = data['params']
-        if (abs(saved_params['cutoff'] - self.params.cutoff) > 1e-6 or
-            abs(saved_params['nn_distance_A'] - self.params.nn_distance_A) > 1e-6 or
+        # Check cutoff only if it exists in saved params (for backwards compatibility)
+        cutoff_mismatch = False
+        if 'cutoff' in saved_params:
+            # Old format with cutoff - just warn but don't fail
+            logger.warning("Loaded neighbor list uses deprecated cutoff parameter")
+            cutoff_mismatch = True
+
+        if (abs(saved_params['nn_distance_A'] - self.params.nn_distance_A) > 1e-6 or
             abs(saved_params['nn_distance_B'] - self.params.nn_distance_B) > 1e-6 or
             abs(saved_params['nn_distance_O'] - self.params.nn_distance_O) > 1e-6):
             logger.warning("Loaded neighbor list parameters differ from current params!")
-            logger.warning(f"  Saved: cutoff={saved_params['cutoff']:.3f}, "
+            logger.warning(f"  Saved: "
                          f"nn_A={saved_params['nn_distance_A']:.3f}, "
                          f"nn_B={saved_params['nn_distance_B']:.3f}, "
                          f"nn_O={saved_params['nn_distance_O']:.3f}")
-            logger.warning(f"  Current: cutoff={self.params.cutoff:.3f}, "
+            logger.warning(f"  Current: "
                          f"nn_A={self.params.nn_distance_A:.3f}, "
                          f"nn_B={self.params.nn_distance_B:.3f}, "
                          f"nn_O={self.params.nn_distance_O:.3f}")

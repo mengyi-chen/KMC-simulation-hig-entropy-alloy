@@ -104,10 +104,92 @@ class BarrierCalculator:
 
     #     return struct_init, struct_final
     
+    # def build_hop_structures(self, structure: SpinelStructure,
+    #                        neighbor_manager: NeighborManager,
+    #                        vac_idx: int, atom_idx: int) -> Tuple[Atoms, Atoms]:
+    #     """Build initial and final structures for a hop using cubic local environment
+    #
+    #     Args:
+    #         structure: SpinelStructure instance
+    #         neighbor_manager: NeighborManager instance
+    #         vac_idx: Vacancy index (destination)
+    #         atom_idx: Atom index (source, can be cation or oxygen)
+    #
+    #     Returns:
+    #         struct_init: Initial structure (atom at atom_idx) in cubic cell
+    #         struct_final: Final structure (atom moved to vac_idx) in cubic cell
+    #     """
+    #     # Build combined cluster including neighbors of vacancy
+    #     cluster_indices = set([atom_idx, vac_idx])
+    #
+    #     # Get neighbors from CSR (already built with cubic boundaries)
+    #     neighbors_csr = neighbor_manager.neighbors_csr
+    #     cluster_indices.update(neighbors_csr.get_neighbors(vac_idx))
+    #     cluster_indices = list(cluster_indices)
+    #
+    #     # Get positions and symbols
+    #     cluster_pos = structure.positions[cluster_indices] @ structure.cell
+    #     cluster_symbols = [structure.symbols[i] for i in cluster_indices]
+    #
+    #     # Remove vacancies (both X and XO)
+    #     non_vac_mask = [s not in ['X', 'XO'] for s in cluster_symbols]
+    #     non_vac_indices = [idx for idx, m in zip(cluster_indices, non_vac_mask) if m]
+    #     non_vac_pos = cluster_pos[non_vac_mask]
+    #     non_vac_symbols = [s for s, m in zip(cluster_symbols, non_vac_mask) if m]
+    #
+    #     # Find atom index in cluster
+    #     atom_cluster_idx = non_vac_indices.index(atom_idx)
+    #
+    #     # Prepare cubic cell for the cluster
+    #     actual_cutoff = neighbor_manager.params.cutoff
+    #     cube_size = 2.0 * actual_cutoff
+    #     cubic_cell = np.array([
+    #         [cube_size, 0.0, 0.0],
+    #         [0.0, cube_size, 0.0],
+    #         [0.0, 0.0, cube_size]
+    #     ])
+    #
+    #     # Unwrap positions relative to vacancy (handle PBC)
+    #     vac_pos_cart = structure.positions[vac_idx] @ structure.cell
+    #     unwrapped_pos = non_vac_pos.copy()
+    #     for i in range(len(unwrapped_pos)):
+    #         delta = unwrapped_pos[i] - vac_pos_cart
+    #         # Unwrap in x and y directions (apply PBC)
+    #         delta[0] -= np.round(delta[0] / structure.cell[0, 0]) * structure.cell[0, 0]
+    #         delta[1] -= np.round(delta[1] / structure.cell[1, 1]) * structure.cell[1, 1]
+    #         # Z direction: no PBC wrapping needed
+    #         unwrapped_pos[i] = vac_pos_cart + delta
+    #
+    #     # Center atoms in cubic cell (vacancy at center)
+    #     center_shift = np.array([cube_size/2.0, cube_size/2.0, cube_size/2.0])
+    #     init_pos = unwrapped_pos - vac_pos_cart + center_shift
+    #
+    #     # Final structure: move atom to vacancy position
+    #     final_pos = init_pos.copy()
+    #     final_pos[atom_cluster_idx] = center_shift  # Atom moves to vacancy (center)
+    #
+    #     # Create structures with cubic cell and correct PBC
+    #     # PBC in x,y directions (periodic in plane), but not in z (surface normal)
+    #     struct_init = Atoms(
+    #         symbols=non_vac_symbols,
+    #         positions=init_pos,
+    #         cell=cubic_cell,
+    #         pbc=[True, True, False]
+    #     )
+    #
+    #     struct_final = Atoms(
+    #         symbols=non_vac_symbols,
+    #         positions=final_pos,
+    #         cell=cubic_cell,
+    #         pbc=[True, True, False]
+    #     )
+    #
+    #     return struct_init, struct_final
+
     def build_hop_structures(self, structure: SpinelStructure,
                            neighbor_manager: NeighborManager,
                            vac_idx: int, atom_idx: int) -> Tuple[Atoms, Atoms]:
-        """Build initial and final structures for a hop using cubic local environment
+        """Build initial and final structures for a hop using unit-cell-based local environment
 
         Args:
             structure: SpinelStructure instance
@@ -116,13 +198,13 @@ class BarrierCalculator:
             atom_idx: Atom index (source, can be cation or oxygen)
 
         Returns:
-            struct_init: Initial structure (atom at atom_idx) in cubic cell
-            struct_final: Final structure (atom moved to vac_idx) in cubic cell
+            struct_init: Initial structure (atom at atom_idx) with unit-cell-based environment
+            struct_final: Final structure (atom moved to vac_idx) with unit-cell-based environment
         """
         # Build combined cluster including neighbors of vacancy
         cluster_indices = set([atom_idx, vac_idx])
 
-        # Get neighbors from CSR (already built with cubic boundaries)
+        # Get neighbors from CSR (now built with unit-cell-based boundaries)
         neighbors_csr = neighbor_manager.neighbors_csr
         cluster_indices.update(neighbors_csr.get_neighbors(vac_idx))
         cluster_indices = list(cluster_indices)
@@ -140,13 +222,24 @@ class BarrierCalculator:
         # Find atom index in cluster
         atom_cluster_idx = non_vac_indices.index(atom_idx)
 
-        # Prepare cubic cell for the cluster
-        actual_cutoff = neighbor_manager.params.cutoff
-        cube_size = 2.0 * actual_cutoff
-        cubic_cell = np.array([
-            [cube_size, 0.0, 0.0],
-            [0.0, cube_size, 0.0],
-            [0.0, 0.0, cube_size]
+        # Determine the unit-cell-based local environment dimensions
+        # Get vacancy's unit cell position
+        vac_pos_frac = structure.positions[vac_idx]
+        supercell_size = structure.supercell_size
+        vac_cell_idx = np.floor(vac_pos_frac * supercell_size + 1e-6).astype(int)
+
+        # XY: 3x3 grid, Z: conditional (1-3 cells)
+        n_cells_xy = 3
+        n_cells_z_below = 1 if vac_cell_idx[2] >= 1 else 0
+        n_cells_z_above = 1 if vac_cell_idx[2] < supercell_size[2] - 1 else 0
+        n_cells_z = 1 + n_cells_z_below + n_cells_z_above
+
+        # Calculate local cell dimensions
+        unit_cell_size = neighbor_manager.params.unit_cell_size
+        local_cell = np.array([
+            [n_cells_xy * unit_cell_size, 0.0, 0.0],
+            [0.0, n_cells_xy * unit_cell_size, 0.0],
+            [0.0, 0.0, n_cells_z * unit_cell_size]
         ])
 
         # Unwrap positions relative to vacancy (handle PBC)
@@ -160,27 +253,32 @@ class BarrierCalculator:
             # Z direction: no PBC wrapping needed
             unwrapped_pos[i] = vac_pos_cart + delta
 
-        # Center atoms in cubic cell (vacancy at center)
-        center_shift = np.array([cube_size/2.0, cube_size/2.0, cube_size/2.0])
+        # Center atoms in local cell
+        # XY: always centered (3x3 grid), Z: depends on whether we have cells below
+        center_shift = np.array([
+            local_cell[0, 0] / 2.0,  # Center in X
+            local_cell[1, 1] / 2.0,  # Center in Y
+            (n_cells_z_below + 0.5) * unit_cell_size  # Position in Z depends on cells below
+        ])
         init_pos = unwrapped_pos - vac_pos_cart + center_shift
 
         # Final structure: move atom to vacancy position
         final_pos = init_pos.copy()
         final_pos[atom_cluster_idx] = center_shift  # Atom moves to vacancy (center)
 
-        # Create structures with cubic cell and correct PBC
+        # Create structures with local cell and correct PBC
         # PBC in x,y directions (periodic in plane), but not in z (surface normal)
         struct_init = Atoms(
             symbols=non_vac_symbols,
             positions=init_pos,
-            cell=cubic_cell,
+            cell=local_cell,
             pbc=[True, True, False]
         )
 
         struct_final = Atoms(
             symbols=non_vac_symbols,
             positions=final_pos,
-            cell=cubic_cell,
+            cell=local_cell,
             pbc=[True, True, False]
         )
 

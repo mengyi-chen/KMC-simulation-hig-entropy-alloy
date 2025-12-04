@@ -213,7 +213,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Cavity Healing kMC')
     parser.add_argument('--device', type=str, default='2', help='CUDA device or cpu')
     parser.add_argument('--temp', type=float, default=1000, help='Temperature in Kelvin')
-    parser.add_argument('--n_cutoff_cell', type=int, default=1, help='Number of unit cells for cutoff radius (half-length of local cube)')
+    # parser.add_argument('--n_cutoff_cell', type=int, default=1, help='DEPRECATED: Number of unit cells for cutoff radius (no longer used)')
     parser.add_argument('--steps', type=int, default=int(1e6), help='Number of kMC steps')
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
     parser.add_argument('--log_interval', type=int, default=1000, help='Save interval for configurations')
@@ -302,7 +302,7 @@ if __name__ == '__main__':
         # Create parameters
         params = KMCParams(
             temperature=args.temp,
-            n_cutoff_cell=args.n_cutoff_cell,
+            # n_cutoff_cell=args.n_cutoff_cell,  # DEPRECATED: No longer used
             batch_size=args.batch_size,
             base_barriers=base_barriers
         )
