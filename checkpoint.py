@@ -94,7 +94,7 @@ def save_checkpoint(kmc_instance, checkpoint_path: str) -> None:
 
 
 def load_checkpoint(checkpoint_path: str, device, kmc_class,
-                    energy_model_type: str = 'chgnet', mace_model_path: str = None) -> Any:
+                    energy_model_type: str = 'chgnet', mace_model_name: str = 'medium-omat-0') -> Any:
     """Load a CavityHealingKMC instance from checkpoint
 
     Args:
@@ -102,7 +102,7 @@ def load_checkpoint(checkpoint_path: str, device, kmc_class,
         device: Device for energy model
         kmc_class: The CavityHealingKMC class
         energy_model_type: Type of energy model ('chgnet', 'mace')
-        mace_model_path: Path to MACE model file (only for MACE)
+        mace_model_name: MACE foundation model name (only for MACE)
 
     Returns:
         Restored CavityHealingKMC instance
@@ -145,7 +145,7 @@ def load_checkpoint(checkpoint_path: str, device, kmc_class,
     # Load energy model (use provided type or default to chgnet)
     logger.info(f"Loading {energy_model_type} model...")
     if energy_model_type == 'mace':
-        energy_model = create_energy_model(energy_model_type, device=device, model_path=mace_model_path)
+        energy_model = create_energy_model(energy_model_type, device=device, model_name=mace_model_name)
     else:
         energy_model = create_energy_model(energy_model_type, device=device)
     logger.info(f"Using energy model: {energy_model.get_model_name()}")

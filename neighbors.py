@@ -205,16 +205,17 @@ class NeighborManager:
             x_cells = [(center_cell_idx[0] + offset) % supercell_size[0] for offset in [-1, 0, 1]]
             y_cells = [(center_cell_idx[1] + offset) % supercell_size[1] for offset in [-1, 0, 1]]
 
-            # Z direction: conditional inclusion
-            z_cells = [center_cell_idx[2]]  # Always include the center cell in z
-
-            # Check if there's at least 1 cell below
-            if center_cell_idx[2] >= 1:
-                z_cells.append(center_cell_idx[2] - 1)
-
-            # Check if there's at least 1 cell above
-            if center_cell_idx[2] < supercell_size[2] - 1:
-                z_cells.append(center_cell_idx[2] + 1)
+            # Z direction: always 3 cells (3x3x3 local environment)
+            # If center_cell_idx[2] == 0 (bottom), use [0, 1, 2]
+            # If center_cell_idx[2] == supercell_size[2] - 1 (top), use [-2, -1, 0]
+            # Otherwise use [-1, 0, 1] relative to center
+            if center_cell_idx[2] == 0:
+                z_offset = [0, 1, 2]
+            elif center_cell_idx[2] == supercell_size[2] - 1:
+                z_offset = [-2, -1, 0]
+            else:
+                z_offset = [-1, 0, 1]
+            z_cells = [center_cell_idx[2] + offset for offset in z_offset]
 
             # Vectorized filtering: check if atoms are in allowed cells
             in_x_cells = np.isin(all_cell_indices[:, 0], x_cells)
@@ -250,7 +251,7 @@ class NeighborManager:
         avg_B = total_bonds_B / len(B_indices) if len(B_indices) > 0 else 0
         avg_O = total_bonds_O / len(O_indices) if len(O_indices) > 0 else 0
 
-        logger.info(f"General neighbor list for energy calculations (unit-cell-based: 3x3 XY, conditional Z):")
+        logger.info(f"General neighbor list for energy calculations (unit-cell-based: 3x3x3):")
         logger.info(f"  A-sites: {total_bonds_A} bonds (avg {avg_A:.1f} per atom)")
         logger.info(f"  B-sites: {total_bonds_B} bonds (avg {avg_B:.1f} per atom)")
         logger.info(f"  O-sites: {total_bonds_O} bonds (avg {avg_O:.1f} per atom)")

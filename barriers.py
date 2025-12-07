@@ -228,56 +228,72 @@ class BarrierCalculator:
         supercell_size = structure.supercell_size
         vac_cell_idx = np.floor(vac_pos_frac * supercell_size + 1e-6).astype(int)
 
-        # XY: 3x3 grid, Z: conditional (1-3 cells)
-        n_cells_xy = 3
-        n_cells_z_below = 1 if vac_cell_idx[2] >= 1 else 0
-        n_cells_z_above = 1 if vac_cell_idx[2] < supercell_size[2] - 1 else 0
-        n_cells_z = 1 + n_cells_z_below + n_cells_z_above
+        # Always 3x3x3 local environment
+        n_cells = 3
 
         # Calculate local cell dimensions
         unit_cell_size = neighbor_manager.params.unit_cell_size
         local_cell = np.array([
-            [n_cells_xy * unit_cell_size, 0.0, 0.0],
-            [0.0, n_cells_xy * unit_cell_size, 0.0],
-            [0.0, 0.0, n_cells_z * unit_cell_size]
+            [n_cells * unit_cell_size, 0.0, 0.0],
+            [0.0, n_cells * unit_cell_size, 0.0],
+            [0.0, 0.0, n_cells * unit_cell_size]
         ])
 
-        # Unwrap positions relative to vacancy (handle PBC)
+        # Unwrap positions in XY direction (handle PBC at supercell boundaries)
         vac_pos_cart = structure.positions[vac_idx] @ structure.cell
-        unwrapped_pos = non_vac_pos.copy()
-        for i in range(len(unwrapped_pos)):
-            delta = unwrapped_pos[i] - vac_pos_cart
-            # Unwrap in x and y directions (apply PBC)
+        init_pos = non_vac_pos.copy()
+        for i in range(len(init_pos)):
+            delta = init_pos[i] - vac_pos_cart
+            # Unwrap in x and y directions only (apply PBC)
             delta[0] -= np.round(delta[0] / structure.cell[0, 0]) * structure.cell[0, 0]
             delta[1] -= np.round(delta[1] / structure.cell[1, 1]) * structure.cell[1, 1]
-            # Z direction: no PBC wrapping needed
-            unwrapped_pos[i] = vac_pos_cart + delta
+            init_pos[i] = delta  # Position relative to vacancy
 
-        # Center atoms in local cell
-        # XY: always centered (3x3 grid), Z: depends on whether we have cells below
-        center_shift = np.array([
-            local_cell[0, 0] / 2.0,  # Center in X
-            local_cell[1, 1] / 2.0,  # Center in Y
-            (n_cells_z_below + 0.5) * unit_cell_size  # Position in Z depends on cells below
-        ])
-        init_pos = unwrapped_pos - vac_pos_cart + center_shift
+        # Shift positions so all atoms are inside the local cell
+        # Simply shift by -min to make minimum coordinate = 0
+        min_pos = init_pos.min(axis=0)
+        init_pos = init_pos - min_pos
+
+        # Vacancy position after shift (was at origin, now shifted by -min_pos)
+        vac_local_pos = -min_pos
+
+        # CRITICAL: Sort atoms by position (x, y, z) to match ClusterExpansionProcessor ordering
+        # Processor uses XYZ ordering: x slowest, z fastest
+        # np.lexsort sorts by LAST key first, so we pass (z, y, x) to get x-primary sorting
+        sort_keys = np.round(init_pos / 1e-4).astype(int)  # Round to 1e-4 angstrom precision
+        sort_indices = np.lexsort((sort_keys[:, 2], sort_keys[:, 1], sort_keys[:, 0]))
+
+        # Apply sorting to initial structure
+        init_pos_sorted = init_pos[sort_indices]
+        init_symbols_sorted = [non_vac_symbols[i] for i in sort_indices]
+
+        # Update atom_cluster_idx after sorting
+        atom_cluster_idx_sorted = np.where(sort_indices == atom_cluster_idx)[0][0]
 
         # Final structure: move atom to vacancy position
-        final_pos = init_pos.copy()
-        final_pos[atom_cluster_idx] = center_shift  # Atom moves to vacancy (center)
+        final_pos = init_pos_sorted.copy()
+        final_pos[atom_cluster_idx_sorted] = vac_local_pos  # Atom moves to vacancy position
+
+        # Sort final structure as well (positions changed, need to re-sort)
+        # Same XYZ ordering as initial structure
+        sort_keys_final = np.round(final_pos / 1e-4).astype(int)
+        sort_indices_final = np.lexsort((sort_keys_final[:, 2], sort_keys_final[:, 1], sort_keys_final[:, 0]))
+
+        final_pos_sorted = final_pos[sort_indices_final]
+        final_symbols_sorted = [init_symbols_sorted[i] for i in sort_indices_final]
 
         # Create structures with local cell and correct PBC
         # PBC in x,y directions (periodic in plane), but not in z (surface normal)
         struct_init = Atoms(
-            symbols=non_vac_symbols,
-            positions=init_pos,
+            symbols=init_symbols_sorted,
+            positions=init_pos_sorted,
             cell=local_cell,
             pbc=[True, True, False]
         )
 
         struct_final = Atoms(
-            symbols=non_vac_symbols,
-            positions=final_pos,
+            symbols=final_symbols_sorted,
+            positions=final_pos_sorted,
             cell=local_cell,
             pbc=[True, True, False]
         )
