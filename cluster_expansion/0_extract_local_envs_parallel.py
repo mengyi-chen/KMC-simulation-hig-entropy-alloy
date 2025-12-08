@@ -329,7 +329,7 @@ def main():
                         help='Fraction of data to use for testing (default: 0.2)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for train/test split (default: 42)')
-    parser.add_argument('--n_random', type=int, default=5000,
+    parser.add_argument('--n_random', type=int, default=2000,
                         help='Number of random structures to generate (default: 0, disabled)')
     parser.add_argument('--vac_pct_min', type=float, default=0.1,
                         help='Minimum vacancy percentage for random structures (default: 0.1)')
