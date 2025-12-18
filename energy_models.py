@@ -63,8 +63,9 @@ class CHGNetModel(EnergyModel):
         
         # self.model.graph_converter.atom_graph_cutoff = 10.0
 
-        # NOTE: calculat the total energy, not intensive property
-        self.model.is_intensive = False 
+        # NOTE: don't use self.model.is_intensive = False, this will give positive energy, which is weird
+        # NOTE: CHGNet will give energy per atom, we multiple it by the number of atoms 
+        # self.model.is_intensive = False 
         self.device = device
         self.adaptor = AseAtomsAdaptor()
 
@@ -95,24 +96,22 @@ class CHGNetModel(EnergyModel):
                 batch_size=batch_size
             )
 
-        # Extract energies
+        # Extract energies (CHGNet returns energy per atom, multiply by num_atoms for total energy)
         if isinstance(results, list):
-            return np.array([r['e'] for r in results])
+            return np.array([r['e'] * len(pmg_structures[i]) for i, r in enumerate(results)])
         else:
-            return np.array([results['e']])
+            return np.array([results['e'] * len(pmg_structures[0])])
 
     def get_model_name(self) -> str:
         return "CHGNet"
 
 class MACEModel(EnergyModel):
-    """MACE foundation model wrapper using torch-sim for GPU batched computation
+    """MACE foundation model wrapper using mace_mp ASE calculator
 
-    This class uses torch-sim for efficient GPU-batched energy computation
-    with MACE foundation models (e.g., medium-omat-0, small-omat-0).
+    This class uses the MACE foundation models directly via the ASE calculator interface.
     """
-
     def __init__(self, device='cuda:0', model_name: str = 'medium-omat-0'):
-        """Initialize MACE foundation model
+        """Initialize MACE foundation model with torch-sim
 
         Args:
             device: Device for computation ('cpu', 'cuda:0', etc.)
@@ -126,8 +125,10 @@ class MACEModel(EnergyModel):
         import torch_sim as ts
         from torch_sim.models.mace import MaceModel
         from mace.calculators import mace_mp
+        from pymatgen.io.ase import AseAtomsAdaptor
 
         self.model_name = model_name
+        self.adaptor = AseAtomsAdaptor()
 
         # Convert torch.device to string if needed
         if isinstance(device, torch.device):
@@ -137,7 +138,7 @@ class MACEModel(EnergyModel):
         self.device = device_str
 
         # Load MACE foundation model
-        print(f"Loading MACE foundation model '{model_name}' on {device_str}...")
+        print(f"Loading MACE foundation model '{model_name}' with torch-sim on {device_str}...")
         mace_raw = mace_mp(model=model_name, return_raw_model=True)
 
         self.model = MaceModel(
@@ -147,9 +148,6 @@ class MACEModel(EnergyModel):
             compute_forces=False,
             compute_stress=False
         )
-
-        self.r_max = mace_raw.r_max
-        print(f"Model r_max: {self.r_max}")
 
         # Store torch_sim module reference for batched computation
         self._ts = ts
@@ -161,7 +159,7 @@ class MACEModel(EnergyModel):
 
         Args:
             structures: Single structure or list of structures (ASE Atoms)
-            batch_size: Batch size for GPU computation
+            batch_size: Batch size for GPU computation (used by autobatcher)
 
         Returns:
             energies: Array of energies in eV
@@ -169,27 +167,31 @@ class MACEModel(EnergyModel):
         if not isinstance(structures, list):
             structures = [structures]
 
+        # Define prop_calculators to extract potential_energy from state
+        prop_calculators = {
+            1: {"potential_energy": lambda state: state.energy},
+        }
+
+        with torch.no_grad():
+            # Use ts.static with autobatching for efficient GPU memory management
+            results = self._ts.static(
+                system=structures,
+                model=self.model,
+                trajectory_reporter={
+                    "filenames": None,  # Don't save trajectories, just get properties
+                    "prop_calculators": prop_calculators,
+                },
+                autobatcher=True,  # Let torch-sim handle batching automatically
+            )
+
+        # Extract energies from results
         energies = []
-        n_batches = (len(structures) + batch_size - 1) // batch_size
-
-        for i in range(n_batches):
-            start_idx = i * batch_size
-            end_idx = min((i + 1) * batch_size, len(structures))
-            batch = structures[start_idx:end_idx]
-
-            with torch.no_grad():
-                results = self._ts.static(system=batch, model=self.model)
-
-                for r in results:
-                    # torch-sim returns 'potential_energy' not 'energy'
-                    e = r.get('potential_energy', r.get('energy', None))
-                    if e is not None:
-                        if isinstance(e, torch.Tensor):
-                            energies.append(float(e.cpu().numpy().item()))
-                        else:
-                            energies.append(float(e))
-                    else:
-                        energies.append(np.nan)
+        for r in results:
+            e = r["potential_energy"][-1]  # Get the energy value
+            if isinstance(e, torch.Tensor):
+                energies.append(float(e.cpu().item()))
+            else:
+                energies.append(float(e))
 
         return np.array(energies)
 
